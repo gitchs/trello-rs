@@ -1,12 +1,17 @@
+use std::process;
+
 use clap::Parser;
 use serde::Serialize;
-use std::process;
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
 
+use trello_rs::cache::Cache;
 use trello_rs::cli::*;
 use trello_rs::client::TrelloClient;
 use trello_rs::config::Config;
+use trello_rs::models::board::Board;
+use trello_rs::models::card::Card;
+use trello_rs::models::list::TrelloList;
 use trello_rs::{ApiKey, ApiToken};
 
 fn print_json(value: &impl Serialize) {
@@ -16,6 +21,12 @@ fn print_json(value: &impl Serialize) {
 fn fail(msg: impl std::fmt::Display) -> ! {
     eprintln!("error: {msg}");
     process::exit(1);
+}
+
+fn resolve_board_id<'a>(board_id: Option<&'a str>, config: &'a Config) -> &'a str {
+    board_id
+        .or(config.default_board_id.as_deref())
+        .unwrap_or_else(|| fail("--board-id is required (or set default_board_id in config)"))
 }
 
 #[tokio::main]
@@ -41,27 +52,34 @@ async fn main() {
     let token = ApiToken::new(&config.api_token).unwrap_or_else(|e| fail(e));
     let client = TrelloClient::new(key, token);
 
-    if let Err(e) = dispatch(&client, &config.api_token, cli.command).await {
+    let cache_path = trello_rs::cache::default_cache_path();
+    let cache = Cache::open(std::path::Path::new(&cache_path)).unwrap_or_else(|e| {
+        fail(format!("opening cache at {}: {e}", cache_path));
+    });
+
+    if let Err(e) = dispatch(&client, &cache, &config, &config.api_token, cli.command).await {
         fail(e);
     }
 }
 
 async fn dispatch(
     client: &TrelloClient,
+    cache: &Cache,
+    config: &Config,
     api_token: &str,
     cmd: Commands,
 ) -> trello_rs::error::Result<()> {
     match cmd {
         Commands::Board { cmd } => handle_board(client, cmd).await,
-        Commands::Card { cmd } => handle_card(client, cmd).await,
-        Commands::List { cmd } => handle_list(client, cmd).await,
-        Commands::Label { cmd } => handle_label(client, cmd).await,
+        Commands::Card { cmd } => handle_card(client, cache, config, cmd).await,
+        Commands::List { cmd } => handle_list(client, config, cmd).await,
+        Commands::Label { cmd } => handle_label(client, config, cmd).await,
         Commands::Checklist { cmd } => handle_checklist(client, cmd).await,
         Commands::Member { cmd } => handle_member(client, cmd).await,
         Commands::Search(args) => handle_search(client, args).await,
         Commands::Webhook { cmd } => handle_webhook(client, api_token, cmd).await,
         Commands::Organization { cmd } => handle_organization(client, cmd).await,
-        Commands::Action { cmd } => handle_action(client, cmd).await,
+        Commands::Action { cmd } => handle_action(client, config, cmd).await,
         Commands::Notification { cmd } => handle_notification(client, cmd).await,
         Commands::CustomField { cmd } => handle_custom_field(client, cmd).await,
         Commands::Enterprise { cmd } => handle_enterprise(client, cmd).await,
@@ -69,6 +87,7 @@ async fn dispatch(
         Commands::Token { cmd } => handle_token(client, api_token, cmd).await,
         Commands::Plugin { cmd } => handle_plugin(client, cmd).await,
         Commands::Batch { urls } => handle_batch(client, &urls).await,
+        Commands::Cache { cmd } => handle_cache(client, cache, config, cmd).await,
     }
 }
 
@@ -117,19 +136,33 @@ async fn handle_board(client: &TrelloClient, cmd: BoardCmd) -> trello_rs::error:
 
 // ── Card handlers ─────────────────────────────────────────────────────
 
-async fn handle_card(client: &TrelloClient, cmd: CardCmd) -> trello_rs::error::Result<()> {
+async fn handle_card(
+    client: &TrelloClient,
+    cache: &Cache,
+    config: &Config,
+    cmd: CardCmd,
+) -> trello_rs::error::Result<()> {
     match cmd {
         CardCmd::Get { id } => {
             let card = client.cards().get(id.as_str()).send().await?;
             print_json(&card);
         }
-        CardCmd::List { list_id, board_id } => {
-            let cards = match (list_id, board_id) {
-                (Some(lid), _) => client.lists().get_cards(lid.as_str()).await?,
-                (_, Some(bid)) => client.boards().get_cards(bid.as_str()).await?,
-                _ => fail("card list requires --list-id or --board-id"),
+        CardCmd::List { list_id, board_id, full } => {
+            let board_id = board_id.as_deref();
+            let cards = match (list_id.as_deref(), board_id) {
+                (Some(lid), _) => client.lists().get_cards(lid).await?,
+                (_, Some(bid)) => client.boards().get_cards(bid).await?,
+                (_, None) => {
+                    let bid = resolve_board_id(None, config);
+                    client.boards().get_cards(bid).await?
+                }
             };
-            print_json(&cards);
+            if full {
+                let enriched = enrich_cards(client, cache, &cards).await;
+                print_json(&enriched);
+            } else {
+                print_json(&cards);
+            }
         }
         CardCmd::Create { name, list_id, desc, pos, due } => {
             let mut req = client.cards().create().name(&name);
@@ -153,24 +186,62 @@ async fn handle_card(client: &TrelloClient, cmd: CardCmd) -> trello_rs::error::R
             client.cards().delete(id.as_str()).await?;
             println!("Card deleted.");
         }
+        CardCmd::Comment { cmd } => handle_card_comment(client, cmd).await?,
+    }
+    Ok(())
+}
+
+async fn handle_card_comment(
+    client: &TrelloClient,
+    cmd: CardCommentCmd,
+) -> trello_rs::error::Result<()> {
+    match cmd {
+        CardCommentCmd::List { card_id } => {
+            let actions = client
+                .cards()
+                .get_actions(card_id.as_str())
+                .filter("commentCard")
+                .send()
+                .await?;
+            print_json(&actions);
+        }
+        CardCommentCmd::Add { card_id, text } => {
+            let action = client.cards().add_comment(card_id.as_str(), &text).send().await?;
+            print_json(&action);
+        }
+        CardCommentCmd::Update { card_id, action_id, text } => {
+            let action = client
+                .cards()
+                .update_comment(card_id.as_str(), action_id.as_str())
+                .text(&text)
+                .send()
+                .await?;
+            print_json(&action);
+        }
+        CardCommentCmd::Delete { card_id, action_id } => {
+            client.cards().delete_comment(card_id.as_str(), action_id.as_str()).await?;
+            println!("Comment deleted.");
+        }
     }
     Ok(())
 }
 
 // ── List handlers ─────────────────────────────────────────────────────
 
-async fn handle_list(client: &TrelloClient, cmd: ListCmd) -> trello_rs::error::Result<()> {
+async fn handle_list(client: &TrelloClient, config: &Config, cmd: ListCmd) -> trello_rs::error::Result<()> {
     match cmd {
         ListCmd::Get { id } => {
             let list = client.lists().get(id.as_str()).send().await?;
             print_json(&list);
         }
         ListCmd::List { board_id } => {
-            let lists = client.boards().get_lists(board_id.as_str()).send().await?;
+            let bid = resolve_board_id(board_id.as_deref(), config);
+            let lists = client.boards().get_lists(bid).send().await?;
             print_json(&lists);
         }
         ListCmd::Create { name, board_id, pos } => {
-            let mut req = client.lists().create().name(&name).id_board(board_id.as_str());
+            let bid = resolve_board_id(board_id.as_deref(), config);
+            let mut req = client.lists().create().name(&name).id_board(bid);
             if let Some(ref v) = pos { req = req.pos(v); }
             let list = req.send().await?;
             print_json(&list);
@@ -194,23 +265,25 @@ async fn handle_list(client: &TrelloClient, cmd: ListCmd) -> trello_rs::error::R
 
 // ── Label handlers ────────────────────────────────────────────────────
 
-async fn handle_label(client: &TrelloClient, cmd: LabelCmd) -> trello_rs::error::Result<()> {
+async fn handle_label(client: &TrelloClient, config: &Config, cmd: LabelCmd) -> trello_rs::error::Result<()> {
     match cmd {
         LabelCmd::Get { id } => {
             let label = client.labels().get(id.as_str()).send().await?;
             print_json(&label);
         }
         LabelCmd::List { board_id } => {
-            let labels = client.boards().get_labels(board_id.as_str()).send().await?;
+            let bid = resolve_board_id(board_id.as_deref(), config);
+            let labels = client.boards().get_labels(bid).send().await?;
             print_json(&labels);
         }
         LabelCmd::Create { name, color, board_id } => {
+            let bid = resolve_board_id(board_id.as_deref(), config);
             let label = client
                 .labels()
                 .create()
                 .name(&name)
                 .color(&color)
-                .id_board(board_id.as_str())
+                .id_board(bid)
                 .send()
                 .await?;
             print_json(&label);
@@ -388,14 +461,15 @@ async fn handle_organization(client: &TrelloClient, cmd: OrganizationCmd) -> tre
 
 // ── Action handlers ───────────────────────────────────────────────────
 
-async fn handle_action(client: &TrelloClient, cmd: ActionCmd) -> trello_rs::error::Result<()> {
+async fn handle_action(client: &TrelloClient, config: &Config, cmd: ActionCmd) -> trello_rs::error::Result<()> {
     match cmd {
         ActionCmd::Get { id } => {
             let action = client.actions().get(id.as_str()).send().await?;
             print_json(&action);
         }
         ActionCmd::ListBoard { board_id, filter } => {
-            let mut req = client.boards().get_actions(board_id.as_str());
+            let bid = resolve_board_id(board_id.as_deref(), config);
+            let mut req = client.boards().get_actions(bid);
             if let Some(ref v) = filter { req = req.filter(v); }
             let actions = req.send().await?;
             print_json(&actions);
@@ -490,4 +564,107 @@ async fn handle_batch(client: &TrelloClient, urls: &str) -> trello_rs::error::Re
     let results = client.batch().get(&urls).await?;
     print_json(&results);
     Ok(())
+}
+
+// ── Cache handler ─────────────────────────────────────────────────────
+
+async fn handle_cache(
+    client: &TrelloClient,
+    cache: &Cache,
+    config: &Config,
+    cmd: CacheCmd,
+) -> trello_rs::error::Result<()> {
+    match cmd {
+        CacheCmd::Refresh => {
+            cache.clear().map_err(|e| trello_rs::error::Error::Other(e))?;
+            println!("Cache cleared.");
+
+            let board_id = match config.default_board_id.as_deref() {
+                Some(id) => id,
+                None => {
+                    println!("No default_board_id set in config, skipping cache warm.");
+                    return Ok(());
+                }
+            };
+
+            let board = client.boards().get(board_id).send().await?;
+            cache.put_board(board_id, &board).map_err(|e| trello_rs::error::Error::Other(e))?;
+            println!("Cached board: {}", board_id);
+
+            let lists = client.boards().get_lists(board_id).send().await?;
+            for list in &lists {
+                if let Some(ref id) = list.id {
+                    cache.put_list(id.as_ref(), list).map_err(|e| trello_rs::error::Error::Other(e))?;
+                }
+            }
+            println!("Cached {} lists for board {}", lists.len(), board_id);
+        }
+    }
+    Ok(())
+}
+
+// ── Card enrichment with cache ─────────────────────────────────────────
+
+#[derive(Serialize)]
+struct CardWithContext {
+    card: Card,
+    board: Option<Board>,
+    list: Option<TrelloList>,
+}
+
+async fn enrich_cards(
+    client: &TrelloClient,
+    cache: &Cache,
+    cards: &[Card],
+) -> Vec<CardWithContext> {
+    use std::collections::HashSet;
+
+    let mut board_ids: HashSet<&str> = HashSet::new();
+    let mut list_ids: HashSet<&str> = HashSet::new();
+
+    for card in cards {
+        if let Some(ref id) = card.id_board {
+            board_ids.insert(id.as_ref());
+        }
+        if let Some(ref id) = card.id_list {
+            list_ids.insert(id.as_ref());
+        }
+    }
+
+    // Fetch and cache missing boards
+    for bid in &board_ids {
+        if cache.get_board(bid).is_none() {
+            if let Ok(board) = client.boards().get(*bid).send().await {
+                let _ = cache.put_board(bid, &board);
+            }
+        }
+    }
+
+    // Fetch and cache missing lists
+    for lid in &list_ids {
+        if cache.get_list(lid).is_none() {
+            if let Ok(list) = client.lists().get(*lid).send().await {
+                let _ = cache.put_list(lid, &list);
+            }
+        }
+    }
+
+    cards
+        .iter()
+        .map(|card| {
+            let board = card
+                .id_board
+                .as_ref()
+                .and_then(|id| cache.get_board(id.as_ref()));
+            let list = card
+                .id_list
+                .as_ref()
+                .and_then(|id| cache.get_list(id.as_ref()));
+            CardWithContext {
+                card: card.clone(),
+                board,
+                list,
+            }
+        })
+        .collect()
 }

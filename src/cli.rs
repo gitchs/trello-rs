@@ -100,6 +100,11 @@ pub enum Commands {
         /// Comma-separated list of URLs to batch (e.g. "/boards/123,/boards/456")
         urls: String,
     },
+    /// Manage the local cache
+    Cache {
+        #[command(subcommand)]
+        cmd: CacheCmd,
+    },
 }
 
 // ── Board ──────────────────────────────────────────────────────────────
@@ -182,6 +187,9 @@ pub enum CardCmd {
         /// Board ID (mutually exclusive with --list-id)
         #[arg(long)]
         board_id: Option<String>,
+        /// Resolve board and list information for each card, using local cache
+        #[arg(long)]
+        full: bool,
     },
     /// Create a new card
     Create {
@@ -223,6 +231,53 @@ pub enum CardCmd {
         /// Card ID
         id: String,
     },
+    /// Manage comments on a card
+    Comment {
+        #[command(subcommand)]
+        cmd: CardCommentCmd,
+    },
+}
+
+// ── Card Comment ─────────────────────────────────────────────────────
+
+#[derive(Subcommand)]
+pub enum CardCommentCmd {
+    /// List comments on a card
+    List {
+        /// Card ID
+        #[arg(long)]
+        card_id: String,
+    },
+    /// Add a comment to a card
+    Add {
+        /// Card ID
+        #[arg(long)]
+        card_id: String,
+        /// Comment text
+        #[arg(long, short)]
+        text: String,
+    },
+    /// Update a comment on a card
+    Update {
+        /// Card ID
+        #[arg(long)]
+        card_id: String,
+        /// Comment action ID
+        #[arg(long)]
+        action_id: String,
+        /// New comment text
+        #[arg(long, short)]
+        text: String,
+    },
+    /// Delete a comment from a card
+    Delete {
+        /// Card ID
+        #[arg(long)]
+        card_id: String,
+        /// Comment action ID
+        #[arg(long)]
+        action_id: String,
+    },
 }
 
 // ── List ───────────────────────────────────────────────────────────────
@@ -236,18 +291,18 @@ pub enum ListCmd {
     },
     /// List lists on a board
     List {
-        /// Board ID
+        /// Board ID (falls back to config default_board_id)
         #[arg(long)]
-        board_id: String,
+        board_id: Option<String>,
     },
     /// Create a new list
     Create {
         /// List name
         #[arg(long, short)]
         name: String,
-        /// Board ID
+        /// Board ID (falls back to config default_board_id)
         #[arg(long)]
-        board_id: String,
+        board_id: Option<String>,
         /// Position: top, bottom, or numeric
         #[arg(long)]
         pos: Option<String>,
@@ -287,9 +342,9 @@ pub enum LabelCmd {
     },
     /// List labels on a board
     List {
-        /// Board ID
+        /// Board ID (falls back to config default_board_id)
         #[arg(long)]
-        board_id: String,
+        board_id: Option<String>,
     },
     /// Create a new label
     Create {
@@ -299,9 +354,9 @@ pub enum LabelCmd {
         /// Color: yellow, purple, blue, red, green, orange, black, sky, pink, lime
         #[arg(long)]
         color: String,
-        /// Board ID
+        /// Board ID (falls back to config default_board_id)
         #[arg(long)]
-        board_id: String,
+        board_id: Option<String>,
     },
     /// Update a label
     Update {
@@ -516,9 +571,9 @@ pub enum ActionCmd {
     /// List actions on a board
     #[command(name = "board")]
     ListBoard {
-        /// Board ID
+        /// Board ID (falls back to config default_board_id)
         #[arg(long)]
-        board_id: String,
+        board_id: Option<String>,
         /// Filter type
         #[arg(long)]
         filter: Option<String>,
@@ -589,4 +644,12 @@ pub enum PluginCmd {
         /// Plugin ID
         id: String,
     },
+}
+
+// ── Cache ──────────────────────────────────────────────────────────────
+
+#[derive(Subcommand)]
+pub enum CacheCmd {
+    /// Clear the local RocksDB cache
+    Refresh,
 }
