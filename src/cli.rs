@@ -196,7 +196,7 @@ pub enum CardCmd {
         /// Card name
         #[arg(long, short)]
         name: String,
-        /// List ID (required)
+        /// List ID
         #[arg(long)]
         list_id: Option<String>,
         /// Card description
@@ -208,6 +208,9 @@ pub enum CardCmd {
         /// Due date
         #[arg(long)]
         due: Option<String>,
+        /// Label names to attach (auto-creates on the board if not found)
+        #[arg(long = "label")]
+        labels: Vec<String>,
     },
     /// Update a card
     Update {
@@ -235,6 +238,11 @@ pub enum CardCmd {
     Comment {
         #[command(subcommand)]
         cmd: CardCommentCmd,
+    },
+    /// Manage labels on a card
+    Label {
+        #[command(subcommand)]
+        cmd: CardLabelCmd,
     },
 }
 
@@ -277,6 +285,30 @@ pub enum CardCommentCmd {
         /// Comment action ID
         #[arg(long)]
         action_id: String,
+    },
+}
+
+// ── Card Label ───────────────────────────────────────────────────────
+
+#[derive(Subcommand)]
+pub enum CardLabelCmd {
+    /// Add a label to a card
+    Add {
+        /// Card ID
+        #[arg(long)]
+        card_id: String,
+        /// Label ID
+        #[arg(long)]
+        label_id: String,
+    },
+    /// Remove a label from a card
+    Remove {
+        /// Card ID
+        #[arg(long)]
+        card_id: String,
+        /// Label ID
+        #[arg(long)]
+        label_id: String,
     },
 }
 

@@ -1,0 +1,85 @@
+---
+name: trello
+description: Manage Trello boards, lists, and cards from the command line via the trello-rs CLI. Use this skill whenever the user wants to view, create, move, update, archive, comment on, or label Trello cards, lists, or boards — or mentions Trello, a board/list/card by name or ID, a "TODO/Doing/Done" column, or a kanban workflow. Trigger even when the user doesn't say "trello-rs" explicitly (e.g. "move this card to Done", "what's in my TODO list", "add a card to the sprint board").
+---
+
+# Trello (trello-rs CLI)
+
+`trello-rs` is a config-aware CLI. Auth and the target board are already set in the config file — never ask for keys/tokens or a board, and never pass `--board-id`. Every command operates on the configured board automatically.
+
+Add `--debug` to any command to dump the raw request/response when something fails or behaves unexpectedly.
+
+## Core mental model
+
+Trello is `board → list → card`. The board is fixed by config, so you work with lists and cards. The two things that bite:
+
+1. **Names aren't addresses.** The CLI takes IDs, not names. If the user says "the TODO list" without an ID, resolve it first (see below). Don't guess an ID.
+2. **Scope a card read with `--list-id`** for one column, or omit it to read the whole (configured) board.
+
+## Resolving a name → ID
+
+This is the most common first step. Cache the result for the rest of the conversation instead of re-resolving.
+
+- **List name → ID:** `trello-rs list list` (lists all lists on the configured board), match the name client-side, use its `id`.
+- **Card name → ID:** `trello-rs card list --list-id <id>`, match the name.
+
+When a user asks for cards "in TODO" by name, the flow is always: `list list` → find TODO's id → `card list --list-id <that-id>`.
+
+## Common workflows
+
+**Read what's in a column / whole board:**
+```bash
+trello-rs card list --list-id <LIST_ID>     # one column
+trello-rs card list --full                  # whole configured board; --full resolves list names from local cache
+```
+
+**Add a card to a column:** `--label` auto-creates labels on the board if missing.
+```bash
+trello-rs card create --name "Fix auth bug" --list-id <LIST_ID> --desc "..." --label bug --due 2026-06-01
+```
+
+**Move a card** (e.g. "drag to Done"): update its parent list.
+```bash
+trello-rs card update <CARD_ID> --id-list <DEST_LIST_ID>
+```
+
+**Archive vs delete:** archiving is reversible (set `closed=true`); delete is permanent. Prefer archive unless the user explicitly says delete.
+```bash
+trello-rs card update <CARD_ID> --closed true   # archive (reversible)
+trello-rs card delete <CARD_ID>                 # permanent — confirm first
+```
+
+**Comment / label:**
+```bash
+trello-rs card comment add <CARD_ID> ...
+trello-rs card label add <CARD_ID> ...
+```
+
+## Command reference
+
+### list / card
+Top-level commands are `list` and `card`, each with subcommands. The board is taken from config — `--board-id` is never needed.
+
+**list**
+| cmd | args / key opts |
+|---|---|
+| `list get <ID>` | get one list |
+| `list list` | all lists on the configured board |
+| `list create` | `--name` (req), `--pos top\|bottom\|N` |
+| `list update <ID>` | `--name`, `--closed true\|false`, `--pos` |
+| `list close <ID>` | archive the list |
+
+**card**
+| cmd | args / key opts |
+|---|---|
+| `card get <ID>` | get one card |
+| `card list` | `--list-id` for one column, omit for whole board; `--full` resolves names |
+| `card create` | `--name` (req), `--list-id`, `--desc`, `--pos`, `--due`, `--label` (repeatable, auto-creates) |
+| `card update <ID>` | `--name`, `--desc`, `--closed true\|false`, `--id-list` (move) |
+| `card delete <ID>` | **permanent** |
+| `card comment {list\|add\|update\|delete}` | comment ops on a card |
+| `card label {add\|remove}` | label ops on a card |
+
+## Output
+
+After a mutation, briefly confirm what changed (card name + destination/state), not the raw JSON dump — unless the user asked for raw output or you're debugging.

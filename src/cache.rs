@@ -3,6 +3,7 @@ use std::path::Path;
 use rocksdb::{Options, DB};
 
 use crate::models::board::Board;
+use crate::models::label::Label;
 use crate::models::list::TrelloList;
 
 pub struct Cache {
@@ -23,6 +24,14 @@ impl Cache {
 
     fn list_key(list_id: &str) -> String {
         format!("cache/list/{}/", list_id)
+    }
+
+    fn label_key(label_id: &str) -> String {
+        format!("label/{}/", label_id)
+    }
+
+    fn label_prefix() -> &'static [u8] {
+        b"label/"
     }
 
     pub fn get_board(&self, board_id: &str) -> Option<Board> {
@@ -53,6 +62,37 @@ impl Cache {
         let key = Self::list_key(list_id);
         let value = serde_json::to_vec(list).map_err(|e| e.to_string())?;
         self.db.put(key.as_bytes(), value).map_err(|e| e.to_string())
+    }
+
+    pub fn get_label(&self, label_id: &str) -> Option<Label> {
+        let key = Self::label_key(label_id);
+        self.db
+            .get(key.as_bytes())
+            .ok()
+            .flatten()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+    }
+
+    pub fn put_label(&self, label_id: &str, label: &Label) -> Result<(), String> {
+        let key = Self::label_key(label_id);
+        let value = serde_json::to_vec(label).map_err(|e| e.to_string())?;
+        self.db.put(key.as_bytes(), value).map_err(|e| e.to_string())
+    }
+
+    pub fn get_label_by_name(&self, name: &str) -> Option<Label> {
+        let prefix = Self::label_prefix();
+        self.db
+            .iterator(rocksdb::IteratorMode::From(prefix, rocksdb::Direction::Forward))
+            .filter_map(|r| r.ok())
+            .take_while(|(key, _)| key.starts_with(prefix))
+            .find_map(|(_, value)| {
+                let label: Label = serde_json::from_slice(&value).ok()?;
+                if label.name.as_deref() == Some(name) {
+                    Some(label)
+                } else {
+                    None
+                }
+            })
     }
 
     pub fn clear(&self) -> Result<(), String> {

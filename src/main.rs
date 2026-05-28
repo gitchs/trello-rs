@@ -164,12 +164,25 @@ async fn handle_card(
                 print_json(&cards);
             }
         }
-        CardCmd::Create { name, list_id, desc, pos, due } => {
+        CardCmd::Create { name, list_id, desc, pos, due, labels } => {
             let mut req = client.cards().create().name(&name);
             if let Some(ref v) = list_id { req = req.id_list(v.as_str()); }
             if let Some(ref v) = desc { req = req.desc(v); }
             if let Some(ref v) = pos { req = req.pos(v); }
             if let Some(ref v) = due { req = req.due(v); }
+
+            if !labels.is_empty() {
+                let lid = list_id.as_deref().unwrap_or_else(|| {
+                    fail("--list-id is required when --label is used");
+                });
+                let list = client.lists().get(lid).send().await?;
+                let board_id = list.id_board.as_deref().unwrap_or_else(|| {
+                    fail("list has no idBoard");
+                });
+                let label_ids = resolve_labels(client, cache, board_id, &labels).await?;
+                req = req.id_labels(label_ids);
+            }
+
             let card = req.send().await?;
             print_json(&card);
         }
@@ -187,6 +200,7 @@ async fn handle_card(
             println!("Card deleted.");
         }
         CardCmd::Comment { cmd } => handle_card_comment(client, cmd).await?,
+        CardCmd::Label { cmd } => handle_card_label(client, cmd).await?,
     }
     Ok(())
 }
@@ -221,6 +235,23 @@ async fn handle_card_comment(
         CardCommentCmd::Delete { card_id, action_id } => {
             client.cards().delete_comment(card_id.as_str(), action_id.as_str()).await?;
             println!("Comment deleted.");
+        }
+    }
+    Ok(())
+}
+
+async fn handle_card_label(
+    client: &TrelloClient,
+    cmd: CardLabelCmd,
+) -> trello_rs::error::Result<()> {
+    match cmd {
+        CardLabelCmd::Add { card_id, label_id } => {
+            client.cards().add_label(card_id.as_str(), label_id.as_str()).send().await?;
+            println!("Label added.");
+        }
+        CardLabelCmd::Remove { card_id, label_id } => {
+            client.cards().remove_label(card_id.as_str(), label_id.as_str()).await?;
+            println!("Label removed.");
         }
     }
     Ok(())
@@ -598,9 +629,64 @@ async fn handle_cache(
                 }
             }
             println!("Cached {} lists for board {}", lists.len(), board_id);
+
+            let labels = client.boards().get_labels(board_id).send().await?;
+            for label in &labels {
+                if let Some(ref id) = label.id {
+                    cache.put_label(id.as_ref(), label).map_err(|e| trello_rs::error::Error::Other(e))?;
+                }
+            }
+            println!("Cached {} labels for board {}", labels.len(), board_id);
         }
     }
     Ok(())
+}
+
+// ── Label resolution for card creation ────────────────────────────────
+
+async fn resolve_labels(
+    client: &TrelloClient,
+    cache: &Cache,
+    board_id: &str,
+    names: &[String],
+) -> trello_rs::error::Result<Vec<trello_rs::models::common::TrelloID>> {
+    let colors = ["blue", "green", "orange", "red", "purple", "yellow", "sky", "pink", "lime", "black"];
+
+    let existing = client.boards().get_labels(board_id).send().await?;
+
+    let mut ids = Vec::new();
+    for (i, name) in names.iter().enumerate() {
+        // Try cache first
+        if let Some(label) = cache.get_label_by_name(name) {
+            if let Some(ref id) = label.id {
+                ids.push(id.clone());
+                continue;
+            }
+        }
+        // Try existing labels from the board
+        if let Some(label) = existing.iter().find(|l| l.name.as_deref() == Some(name.as_str())) {
+            if let Some(ref id) = label.id {
+                cache.put_label(id.as_ref(), label).map_err(|e| trello_rs::error::Error::Other(e))?;
+                ids.push(id.clone());
+            }
+        } else {
+            // Auto-create label
+            let color = colors[i % colors.len()];
+            let label = client
+                .labels()
+                .create()
+                .name(name)
+                .color(color)
+                .id_board(board_id)
+                .send()
+                .await?;
+            if let Some(ref id) = label.id {
+                cache.put_label(id.as_ref(), &label).map_err(|e| trello_rs::error::Error::Other(e))?;
+                ids.push(id.clone());
+            }
+        }
+    }
+    Ok(ids)
 }
 
 // ── Card enrichment with cache ─────────────────────────────────────────
