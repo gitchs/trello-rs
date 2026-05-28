@@ -174,6 +174,15 @@ pub enum CardCmd {
         /// Card ID
         id: String,
     },
+    /// List cards in a list or on a board
+    List {
+        /// List ID (mutually exclusive with --board-id)
+        #[arg(long)]
+        list_id: Option<String>,
+        /// Board ID (mutually exclusive with --list-id)
+        #[arg(long)]
+        board_id: Option<String>,
+    },
     /// Create a new card
     Create {
         /// Card name

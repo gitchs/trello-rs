@@ -123,6 +123,14 @@ async fn handle_card(client: &TrelloClient, cmd: CardCmd) -> trello_rs::error::R
             let card = client.cards().get(id.as_str()).send().await?;
             print_json(&card);
         }
+        CardCmd::List { list_id, board_id } => {
+            let cards = match (list_id, board_id) {
+                (Some(lid), _) => client.lists().get_cards(lid.as_str()).await?,
+                (_, Some(bid)) => client.boards().get_cards(bid.as_str()).await?,
+                _ => fail("card list requires --list-id or --board-id"),
+            };
+            print_json(&cards);
+        }
         CardCmd::Create { name, list_id, desc, pos, due } => {
             let mut req = client.cards().create().name(&name);
             if let Some(ref v) = list_id { req = req.id_list(v.as_str()); }

@@ -200,6 +200,30 @@ if [ -n "$TEST_CARD_ID" ]; then
     fi
 fi
 
+echo "--- card list --list-id ---"
+if [ -n "$TEST_LIST_ID" ]; then
+    if OUTPUT=$($BIN card list --list-id "$TEST_LIST_ID" 2>&1); then
+        CARD_COUNT=$(echo "$OUTPUT" | jq '. | length' 2>/dev/null)
+        if [ "${CARD_COUNT:-0}" -gt 0 ]; then
+            pass "card list --list-id"
+            echo "       Found $CARD_COUNT card(s) in list"
+        else
+            fail "card list --list-id" "no cards found in list"
+        fi
+    else
+        fail "card list --list-id" "$OUTPUT"
+    fi
+fi
+
+echo "--- card list --board-id ---"
+if [ -n "$TEST_BOARD_ID" ]; then
+    if OUTPUT=$($BIN card list --board-id "$TEST_BOARD_ID" 2>&1); then
+        pass "card list --board-id"
+    else
+        fail "card list --board-id" "$OUTPUT"
+    fi
+fi
+
 echo "--- card update ---"
 if [ -n "$TEST_CARD_ID" ]; then
     if OUTPUT=$($BIN card update "$TEST_CARD_ID" --name "Test Card Updated" --desc "updated" 2>&1); then
