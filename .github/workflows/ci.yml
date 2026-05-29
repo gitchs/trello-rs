@@ -49,3 +49,12 @@ jobs:
 
       - name: Build
         run: cargo build --release
+
+      - name: Package binary
+        run: tar czf trello-rs-linux-x86_64.tar.gz -C target/release trello-rs
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: trello-rs-linux-x86_64
+          path: trello-rs-linux-x86_64.tar.gz

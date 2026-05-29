@@ -13,8 +13,8 @@
 //! #[tokio::main]
 //! async fn main() -> trello_rs::Result<()> {
 //!     let client = TrelloClient::new(
-//!         ApiKey::new("0471642aefef5fa1fa76530ce1ba4c85")?,
-//!         ApiToken::new("9eb76d9a9d02b8dd40c2f3e5df18556c831d4d1fadbe2c45f8310e6c93b5c548")?,
+//!         ApiKey::new("0471642aefef5fa1fa76530ce1ba4c85"),
+//!         ApiToken::new("9eb76d9a9d02b8dd40c2f3e5df18556c831d4d1fadbe2c45f8310e6c93b5c548"),
 //!     );
 //!
 //!     let board = client.boards()
@@ -37,7 +37,7 @@ pub mod models;
 pub mod params;
 pub mod resources;
 
-pub use auth::{ApiKey, ApiToken, AuthError};
+pub use auth::{ApiKey, ApiToken};
 pub use client::TrelloClient;
 pub use config::Config;
 pub use error::{Error, Result};

@@ -24,9 +24,6 @@ pub enum Error {
     #[error("URL parse error: {0}")]
     Url(#[from] url::ParseError),
 
-    #[error("authentication error: {0}")]
-    Auth(#[from] crate::auth::AuthError),
-
     #[error("{0}")]
     Other(String),
 }

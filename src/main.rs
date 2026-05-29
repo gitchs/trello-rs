@@ -48,8 +48,8 @@ async fn main() {
         fail(format!("loading config from {}: {e}", cli.config));
     });
 
-    let key = ApiKey::new(&config.api_key).unwrap_or_else(|e| fail(e));
-    let token = ApiToken::new(&config.api_token).unwrap_or_else(|e| fail(e));
+    let key = ApiKey::new(&config.api_key);
+    let token = ApiToken::new(&config.api_token);
     let client = TrelloClient::new(key, token);
 
     let cache_path = trello_rs::cache::default_cache_path();
